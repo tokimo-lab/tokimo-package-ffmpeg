@@ -1,5 +1,7 @@
 # tokimo-package-ffmpeg
 
+⚠️ This crate no longer builds the FFmpeg native binaries itself. Native builds (Linux/macOS/Windows) live in [tokimo-lab/tokimo-lib](https://github.com/tokimo-lab/tokimo-lib). This repo only contains the safe Rust FFI bindings consumed via libloading.
+
 High-performance media transcoding library and CLI tool, built on Rust FFI bindings to a patched FFmpeg. Implements a composable 3-stage hardware pipeline — decode, filter, encode — each stage independently configurable with automatic cross-device interop.
 
 [中文文档](README.zh-CN.md)

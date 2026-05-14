@@ -5,10 +5,10 @@ fn main() {
 
     // Search order for FFmpeg install:
     // 1. packages/tokimo-ffmpeg/install/ (own build)
-    // 2. Workspace root bin/ffmpeg/current/ (main project's FFmpeg build)
+    // 2. Workspace root bin/tokimo-lib/current/ (main project's unified native libs bundle)
     let candidates = [
         manifest_dir.join("install"),
-        manifest_dir.join("../../bin/ffmpeg/current"),
+        manifest_dir.join("../../bin/tokimo-lib/current"),
     ];
 
     // Always watch build.rs itself — this is the baseline rerun trigger.

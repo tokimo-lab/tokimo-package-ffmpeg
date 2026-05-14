@@ -6,614 +6,169 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
-  FFMPEG_REF: jellyfin
-  RUST_TOOLCHAIN: stable
   CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: stable
+  TOKIMO_LIB_VERSION: v1.0.2
+  FFMPEG_LINK_MODE: dynamic
 
 jobs:
-  # ─── Format check (fast, no FFmpeg needed) ─────────────────────
-  fmt:
-    name: cargo fmt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - run: cargo fmt --all -- --check
-
-  # ─── Linux: full build + clippy + test ─────────────────────────
-  linux:
-    name: linux (build + clippy + test)
-    runs-on: ubuntu-latest
-    needs: fmt
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Resolve jellyfin-ffmpeg HEAD (for cache key)
-        id: ffmpeg_head
-        run: |
-          set -euo pipefail
-          sha=$(git ls-remote https://github.com/jellyfin/jellyfin-ffmpeg.git "refs/heads/${FFMPEG_REF}" | awk '{print $1}')
-          if [ -z "$sha" ]; then
-            sha=$(git ls-remote https://github.com/jellyfin/jellyfin-ffmpeg.git "refs/tags/${FFMPEG_REF}" | awk '{print $1}')
-          fi
-          [ -n "$sha" ] || { echo "Could not resolve FFMPEG_REF=$FFMPEG_REF"; exit 1; }
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "Resolved jellyfin-ffmpeg ${FFMPEG_REF} -> $sha"
-
-      - name: Cache FFmpeg build (install/ + ffmpeg-src/ + third-party/)
-        id: ffmpeg_cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            install
-            ffmpeg-src
-            third-party
-          key: linux-ffmpeg-${{ steps.ffmpeg_head.outputs.sha }}-${{ hashFiles('scripts/build-ffmpeg.sh', 'scripts/install-deps.sh', 'patches/local/**') }}
-
-      - name: Install build dependencies
-        # Always run: even on cache-hit we need runtime .so files in
-        # /usr/lib for the bundle-runtime-deps step to resolve via ldd.
-        run: ./scripts/install-deps.sh
-
-      - name: Build patched FFmpeg
-        if: steps.ffmpeg_cache.outputs.cache-hit != 'true'
-        run: |
-          # Full GPU build: build-ffmpeg.sh auto-installs nv-codec-headers,
-          # Vulkan-Headers, and AMF headers into third-party/prefix and configure
-          # picks them up via pkg-config / CPATH. Linux runner already has libva,
-          # libplacebo, libshaderc, libvpl, OpenCL ICD via install-deps.sh.
-          ./scripts/build-ffmpeg.sh
-
-      - name: Verify FFmpeg artifacts
-        run: |
-          ls -la install/lib/pkgconfig/
-          echo "── GPU encoders / decoders / hwaccels linked into libavcodec ──"
-          # Use `strings` so verify works on cache-hit runs too (no runtime
-          # deps like libjack reinstalled). Same approach as Windows job.
-          strings install/lib/libavcodec.so.* 2>/dev/null \
-            | grep -oE '(h264_nvenc|hevc_nvenc|av1_nvenc|h264_amf|hevc_amf|av1_amf|h264_qsv|hevc_qsv|av1_qsv|h264_cuvid|hevc_cuvid|av1_cuvid|h264_vaapi|hevc_vaapi|av1_vaapi|h264_vulkan|hevc_vulkan|libplacebo)' \
-            | sort -u || true
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-
-      - name: cargo clippy
-        env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
-          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/install/include
-          FFMPEG_DYN_DIR: ${{ github.workspace }}/install/lib
-          LD_LIBRARY_PATH: ${{ github.workspace }}/install/lib
-          PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
-        run: cargo clippy --lib --bins --tests -- -D warnings
-
-      - name: cargo build
-        env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
-          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/install/include
-          FFMPEG_DYN_DIR: ${{ github.workspace }}/install/lib
-          LD_LIBRARY_PATH: ${{ github.workspace }}/install/lib
-          PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
-        run: cargo build --lib --bins --tests
-
-      - name: cargo test
-        env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
-          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/install/include
-          FFMPEG_DYN_DIR: ${{ github.workspace }}/install/lib
-          LD_LIBRARY_PATH: ${{ github.workspace }}/install/lib
-          PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
-        run: cargo test --lib --bins
-
-      - name: Install patchelf (for rpath rewriting)
-        run: sudo apt-get install -y --no-install-recommends patchelf
-
-      - name: Bundle third-party runtime shared libraries
-        run: ./scripts/bundle-runtime-deps.sh install
-
-      - name: Upload Linux FFmpeg install
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-linux-install
-          path: install
-          if-no-files-found: error
-          retention-days: 1
-
-  # ─── macOS: full build + clippy + test (x86_64 + arm64) ────────
-  macos:
-    name: macos (${{ matrix.arch }}) build + clippy + test
+  ci:
+    name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    needs: fmt
     strategy:
+      fail-fast: false
       matrix:
         include:
-          # TODO: x86_64 — macos-13 runner deprecated; re-enable when
-          # cross-compilation from arm64 runner is wired up.
-          # - arch: x86_64
-          #   runner: macos-13
-          #   brew_prefix: /usr/local
-          - arch: arm64
+          - name: linux x86_64 fmt + clippy + test
+            runner: ubuntu-latest
+            asset: tokimo-lib-linux-x86_64.tar.zst
+          - name: macos aarch64 fmt + clippy + test
             runner: macos-latest
-            brew_prefix: /opt/homebrew
+            asset: tokimo-lib-macos-aarch64.tar.zst
+          - name: windows x86_64-gnu fmt + clippy + test
+            runner: windows-latest
+            asset: tokimo-lib-windows-x86_64.tar.zst
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve jellyfin-ffmpeg HEAD (for cache key)
-        id: ffmpeg_head
+      - name: Install zstd (Linux)
+        if: runner.os == 'Linux'
         run: |
-          set -euo pipefail
-          sha=$(git ls-remote https://github.com/jellyfin/jellyfin-ffmpeg.git "refs/heads/${FFMPEG_REF}" | awk '{print $1}')
-          [ -n "$sha" ] || { echo "Could not resolve FFMPEG_REF=$FFMPEG_REF"; exit 1; }
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-
-      - name: Cache FFmpeg build
-        id: ffmpeg_cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            install
-            ffmpeg-src
-            third-party
-          key: macos-${{ matrix.arch }}-ffmpeg-${{ steps.ffmpeg_head.outputs.sha }}-${{ hashFiles('scripts/build-ffmpeg.sh', 'patches/local/**') }}
-
-      - name: Install build dependencies (Homebrew)
-        # Run unconditionally — even on ffmpeg cache hits. The cached
-        # install/lib/*.dylib have absolute LC_LOAD_DYLIB entries pointing
-        # at the Homebrew prefix for this arch (e.g. /opt/homebrew/opt/
-        # for arm64, /usr/local/opt/ for x86_64). On a fresh runner with
-        # no brew packages installed, dyld aborts with "Library not loaded"
-        # the moment any binary linking libavformat is loaded. Brew is a
-        # fast no-op on already-installed packages.
-        run: |
-          brew update
-          brew install \
-            pkg-config nasm yasm meson ninja cmake gpatch \
-            x264 x265 dav1d svt-av1 libvpx aom \
-            opus libvorbis lame fdk-aac theora libsoxr libopenmpt \
-            libass freetype fribidi harfbuzz fontconfig \
-            libbluray webp zimg chromaprint srt openjpeg jpeg-xl \
-            zvbi \
-            vulkan-headers vulkan-loader molten-vk libplacebo shaderc glslang
-
-      - name: Build patched FFmpeg (macOS)
-        if: steps.ffmpeg_cache.outputs.cache-hit != 'true'
-        env:
-          PKG_CONFIG_PATH: ${{ matrix.brew_prefix }}/lib/pkgconfig
-        run: |
-          # macOS lacks libdrm/libva/libpulse/etc — build-ffmpeg.sh skips them via pkg-config.
-          # NVIDIA / AMF are Linux/Windows-only and stay disabled. Vulkan is enabled
-          # via MoltenVK (Vulkan-on-Metal): brew installs vulkan-headers, vulkan-loader,
-          # molten-vk, libplacebo and shaderc, which configure auto-detects through
-          # pkg-config.
-          ./scripts/build-ffmpeg.sh --no-nvidia --no-amf
-
-      - name: Verify FFmpeg artifacts
-        run: |
-          ls -la install/lib/pkgconfig/
-          echo "── GPU encoders / decoders / hwaccels linked into libavcodec ──"
-          strings install/lib/libavcodec.*.dylib 2>/dev/null \
-            | grep -oE '(h264_videotoolbox|hevc_videotoolbox|prores_videotoolbox|av1_videotoolbox|h264_vaapi|videotoolbox|opencl|libplacebo|h264_vulkan|hevc_vulkan|av1_vulkan|vulkan)' \
-            | sort -u || true
-          echo "── ffmpeg -hwaccels ──"
-          install/bin/ffmpeg -hide_banner -hwaccels || true
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-
-      - name: cargo clippy
-        env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
-          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/install/include
-          FFMPEG_DYN_DIR: ${{ github.workspace }}/install/lib
-          DYLD_FALLBACK_LIBRARY_PATH: ${{ github.workspace }}/install/lib
-          PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
-        run: cargo clippy --lib --bins --tests -- -D warnings
-
-      - name: cargo build
-        env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
-          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/install/include
-          FFMPEG_DYN_DIR: ${{ github.workspace }}/install/lib
-          DYLD_FALLBACK_LIBRARY_PATH: ${{ github.workspace }}/install/lib
-          PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
-        run: cargo build --lib --bins --tests
-
-      - name: cargo test
-        env:
-          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
-          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/install/include
-          FFMPEG_DYN_DIR: ${{ github.workspace }}/install/lib
-          DYLD_FALLBACK_LIBRARY_PATH: ${{ github.workspace }}/install/lib
-          PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
-        run: cargo test --lib --bins
-
-      - name: Upload macOS FFmpeg install (${{ matrix.arch }})
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-macos-${{ matrix.arch }}-install
-          path: install
-          if-no-files-found: error
-          retention-days: 1
-
-
-  # ─── Windows cross-build (Linux runner, BtbN docker image) ─────
-  #
-  # Strategy (rsmpeg windows.md recommended path):
-  #   - Run on ubuntu-latest, NOT a Windows runner. Native MSYS2
-  #     builds were taking 40+ minutes per run and breaking on
-  #     bindgen ABI mismatch (CI runs 25024190034, 25025381651).
-  #   - Cross-compile the patched jellyfin-ffmpeg tree with
-  #     mingw-w64 GCC (x86_64-w64-mingw32) inside BtbN/FFmpeg-Builds'
-  #     `win64-gpl-shared:latest` image, which already ships every
-  #     codec dep we need (x264/x265/dav1d/svt-av1/aom/vpx/opus/lame/
-  #     vorbis/theora/openmpt/soxr/ass/freetype/fribidi/harfbuzz/
-  #     fontconfig/bluray/webp/zimg/srt/openjpeg/libjxl/chromaprint).
-  #   - Build fdk-aac from source inside the same container — BtbN
-  #     does not publish a `nonfree` variant publicly, but the toolchain
-  #     in the image is identical, so we get fdk-aac (~30s autotools
-  #     compile) without rebuilding anything else.
-  #   - Generate the rusty_ffmpeg binding.rs against the produced
-  #     mingw FFmpeg headers using bindgen-cli on the host with
-  #     `-target x86_64-w64-mingw32 -isystem /usr/x86_64-w64-mingw32`.
-  #     The Windows runner consumes this via FFMPEG_BINDING_PATH and
-  #     never invokes bindgen itself (avoids MSVC/mingw ABI mismatch).
-  #   - Upload `install-windows/` + `ffmpeg-binding-windows/binding.rs`
-  #     as artifacts for the `windows` job to download and link.
-  windows-build:
-    name: windows-build (cross via BtbN docker)
-    runs-on: ubuntu-latest
-    needs: fmt
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Resolve jellyfin-ffmpeg HEAD (for cache key)
-        id: ffmpeg_head
-        run: |
-          set -euo pipefail
-          sha=$(git ls-remote https://github.com/jellyfin/jellyfin-ffmpeg.git "refs/heads/${FFMPEG_REF}" | awk '{print $1}')
-          if [ -z "$sha" ]; then
-            sha=$(git ls-remote https://github.com/jellyfin/jellyfin-ffmpeg.git "refs/tags/${FFMPEG_REF}" | awk '{print $1}')
-          fi
-          [ -n "$sha" ] || { echo "Could not resolve FFMPEG_REF=$FFMPEG_REF"; exit 1; }
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-
-      - name: Cache cross-built FFmpeg + binding
-        id: ffmpeg_cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            install-windows
-            ffmpeg-binding-windows
-            ffmpeg-src
-          # Bust on jellyfin HEAD, our scripts, patches, AND the
-          # workflow itself (so configure flag changes invalidate).
-          key: windows-cross-${{ steps.ffmpeg_head.outputs.sha }}-${{ hashFiles('scripts/build-ffmpeg.sh', 'scripts/cross-build-windows.sh', 'scripts/gen-binding-windows.sh', 'patches/local/**', '.github/workflows/ci.yml') }}
-
-      - name: Apply jellyfin + tokimo patches (--patches-only)
-        if: steps.ffmpeg_cache.outputs.cache-hit != 'true'
-        run: |
-          ./scripts/build-ffmpeg.sh --patches-only
-
-      - name: Cross-compile FFmpeg for win64 via BtbN docker
-        if: steps.ffmpeg_cache.outputs.cache-hit != 'true'
-        run: |
-          # Image is ~1.5GB compressed. Plain `docker pull` is fine on
-          # ubuntu-latest (cached across the run via overlay2 layer
-          # store within the job). cross-build-windows.sh re-pulls but
-          # that's a no-op once present.
-          ./scripts/cross-build-windows.sh
-
-      - name: Install bindgen-cli + mingw headers
-        if: steps.ffmpeg_cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
           sudo apt-get update
-          # gcc-mingw-w64-x86-64 ships /usr/x86_64-w64-mingw32/include
-          # which gen-binding-windows.sh feeds to clang via -isystem.
-          # clang itself comes preinstalled on ubuntu-latest runners.
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 clang
-          # bindgen-cli compile is ~90s; cargo cache reused if present.
-          if ! command -v bindgen >/dev/null 2>&1; then
-            cargo install --locked bindgen-cli
-          fi
+          sudo apt-get install -y --no-install-recommends zstd
 
-      - name: Generate Windows binding.rs (bindgen against mingw target)
-        if: steps.ffmpeg_cache.outputs.cache-hit != 'true'
-        run: ./scripts/gen-binding-windows.sh
+      - name: Install zstd (macOS)
+        if: runner.os == 'macOS'
+        run: brew install zstd
 
-      - name: Verify FFmpeg artifacts
+      - name: Install zstd (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command zstd -ErrorAction SilentlyContinue)) {
+            choco install zstandard -y --no-progress
+          }
+
+      - name: Cache tokimo-lib native bundle
+        id: tokimo_lib_cache
+        uses: actions/cache@v4
+        with:
+          path: install
+          key: tokimo-lib-${{ matrix.asset }}-${{ env.TOKIMO_LIB_VERSION }}
+
+      - name: Download tokimo-lib native bundle
+        if: steps.tokimo_lib_cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ls -la install-windows/bin install-windows/lib/pkgconfig install-windows/include
-          echo "binding.rs: $(wc -l < ffmpeg-binding-windows/binding.rs) lines, $(wc -c < ffmpeg-binding-windows/binding.rs) bytes"
-          echo "── GPU symbols linked into Windows FFmpeg DLLs ──"
-          # Cannot run .exe in linux container without wine, so grep the
-          # binaries for GPU codec symbol/feature names. Encoder names live
-          # in avcodec-*.dll (~80MB), not in the thin ffmpeg.exe wrapper.
-          strings install-windows/bin/avcodec-*.dll install-windows/bin/avfilter-*.dll install-windows/bin/avutil-*.dll install-windows/bin/ffmpeg.exe \
-            | grep -oE '(h264_nvenc|hevc_nvenc|av1_nvenc|h264_amf|hevc_amf|av1_amf|h264_qsv|hevc_qsv|av1_qsv|h264_mf|hevc_mf|h264_cuvid|hevc_cuvid|av1_cuvid|h264_vulkan|hevc_vulkan|d3d11va|dxva2|mediafoundation|libplacebo|vulkan)' \
-            | sort -u || true
+          rm -rf install
+          mkdir -p install
+          gh release download "${TOKIMO_LIB_VERSION}" \
+            --repo tokimo-lab/tokimo-lib \
+            --pattern "${{ matrix.asset }}" \
+            --dir .
+          zstd -dc "${{ matrix.asset }}" | tar -xf - -C install
+          rm -f "${{ matrix.asset }}"
 
-      - name: Upload Windows FFmpeg install
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-windows-install
-          path: install-windows
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Upload Windows binding.rs
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-windows-binding
-          path: ffmpeg-binding-windows/binding.rs
-          if-no-files-found: error
-          retention-days: 1
-
-  # ─── Windows: download cross artifacts, run cargo only ─────────
-  #
-  # No msys2, no native FFmpeg compile. The windows runner only:
-  #   1. Pulls the install-windows/ tree + binding.rs from windows-build
-  #   2. Sets up x86_64-pc-windows-gnu Rust toolchain
-  #   3. Adds mingw GCC to PATH for the linker (windows-latest already
-  #      ships mingw at C:\msys64\mingw64\bin and C:\ProgramData\
-  #      mingw64\mingw64\bin; we explicitly prepend the former so
-  #      `rustc -C linker=...` finds gcc.exe / ld.exe matching our
-  #      cross-built FFmpeg's mingw GCC 15 ABI).
-  #   4. Runs cargo {clippy,build,test} with FFMPEG_LIBS_DIR /
-  #      FFMPEG_INCLUDE_DIR / FFMPEG_DLL_PATH / FFMPEG_LINK_MODE /
-  #      FFMPEG_BINDING_PATH pointing at the downloaded artifacts.
-  windows:
-    name: windows (cargo build + clippy + test)
-    runs-on: windows-latest
-    needs: [fmt, windows-build]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download FFmpeg install
-        uses: actions/download-artifact@v4
-        with:
-          name: ffmpeg-windows-install
-          path: install-windows
-
-      - name: Download binding.rs
-        uses: actions/download-artifact@v4
-        with:
-          name: ffmpeg-windows-binding
-          path: ffmpeg-binding-windows
-
-      - name: Verify downloaded artifacts
+      - name: Verify native bundle layout
         shell: bash
         run: |
           set -euo pipefail
-          ls -la install-windows/bin install-windows/lib install-windows/include | head -40
-          ls -la ffmpeg-binding-windows
-          # Sanity-check at least one core DLL + import lib are present.
-          test -f install-windows/bin/avcodec-*.dll || (echo "missing avcodec DLL"; exit 1)
-          test -f install-windows/lib/libavcodec.dll.a || (echo "missing libavcodec.dll.a"; exit 1)
-          test -f ffmpeg-binding-windows/binding.rs
+          test -d install/bin
+          test -d install/lib
+          test -d install/include
+          ls -la install/bin install/lib install/include | head -80
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust toolchain (Unix)
+        if: runner.os != 'Windows'
+        uses: dtolnay/rust-toolchain@stable
         with:
-          # Match the mingw GCC ABI we cross-compiled FFmpeg with.
-          # MSVC-ABI rust would fail at link time against mingw .dll.a
-          # import libs.
-          targets: x86_64-pc-windows-gnu
-          components: clippy, rustfmt
+          components: rustfmt, clippy
 
-      - name: Install MinGW (for x86_64-pc-windows-gnu linker)
-        # windows-latest no longer reliably ships C:\msys64\mingw64. Pin
-        # mingw-w64 GCC via egor-tensin/setup-mingw so cargo's gnu target
-        # always finds gcc.exe regardless of runner image drift.
+      - name: Set up Rust toolchain (Windows GNU)
+        if: runner.os == 'Windows'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+          components: rustfmt, clippy
+
+      - name: Install MinGW (Windows GNU linker)
+        if: runner.os == 'Windows'
         uses: egor-tensin/setup-mingw@v2
         with:
           platform: x64
           static: 0
 
+      - name: Configure LLVM/clang for bindgen (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path "$llvmBin\clang.exe")) {
+            choco install llvm -y --no-progress
+          }
+          if (-not (Test-Path "$llvmBin\clang.exe")) {
+            throw "clang.exe not found at $llvmBin"
+          }
+          $gccPath = (Get-Command gcc).Source
+          $mingwRoot = Split-Path (Split-Path $gccPath -Parent) -Parent
+          "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BINDGEN_EXTRA_CLANG_ARGS=--target=x86_64-w64-windows-gnu -I$mingwRoot\include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
 
-      - name: cargo fmt / clippy / build / test
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (Unix)
+        if: runner.os != 'Windows'
+        env:
+          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
+          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/install/include
+          FFMPEG_DYN_DIR: ${{ github.workspace }}/install/lib
+          FFMPEG_LIBS_DIR: ${{ github.workspace }}/install/lib
+          FFMPEG_LINK_MODE: dynamic
+          LD_LIBRARY_PATH: ${{ github.workspace }}/install/lib
+          DYLD_FALLBACK_LIBRARY_PATH: ${{ github.workspace }}/install/lib
+          PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
+        run: cargo clippy --lib --bins --tests -- -D warnings
+
+      - name: cargo test (Unix)
+        if: runner.os != 'Windows'
+        env:
+          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
+          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/install/include
+          FFMPEG_DYN_DIR: ${{ github.workspace }}/install/lib
+          FFMPEG_LIBS_DIR: ${{ github.workspace }}/install/lib
+          FFMPEG_LINK_MODE: dynamic
+          LD_LIBRARY_PATH: ${{ github.workspace }}/install/lib
+          DYLD_FALLBACK_LIBRARY_PATH: ${{ github.workspace }}/install/lib
+          PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
+        run: cargo test --lib --bins
+
+      - name: cargo clippy and test (Windows GNU)
+        if: runner.os == 'Windows'
         shell: pwsh
         env:
-          # rusty_ffmpeg's Windows path in build.rs only honors
-          # FFMPEG_LIBS_DIR (+ FFMPEG_INCLUDE_DIR) for linking; the
-          # `link_system_ffmpeg` feature is gated to non-Windows, so
-          # PKG_CONFIG_PATH alone produces "No linking method set!".
-          FFMPEG_LIBS_DIR: ${{ github.workspace }}\install-windows\lib
-          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}\install-windows\include
-          FFMPEG_DLL_PATH: ${{ github.workspace }}\install-windows\bin
+          FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}\install\lib\pkgconfig
+          FFMPEG_INCLUDE_DIR: ${{ github.workspace }}\install\include
+          FFMPEG_DYN_DIR: ${{ github.workspace }}\install\lib
+          FFMPEG_LIBS_DIR: ${{ github.workspace }}\install\lib
+          FFMPEG_DLL_PATH: ${{ github.workspace }}\install\bin
           FFMPEG_LINK_MODE: dynamic
-          # Skip rusty_ffmpeg's bindgen invocation entirely — use the
-          # pre-generated binding.rs from the windows-build job, which
-          # was generated against mingw-w64 sysroot headers using
-          # `clang -target x86_64-w64-mingw32`. Avoids the windows-runner
-          # MSVC clang vs mingw GCC ABI mismatch.
-          FFMPEG_BINDING_PATH: ${{ github.workspace }}\ffmpeg-binding-windows\binding.rs
         run: |
-          # FFmpeg DLLs need to be on PATH for tests (LoadLibrary fallback).
-          $env:PATH = "${{ github.workspace }}\install-windows\bin;" + $env:PATH
-          rustc --version --verbose
-          cargo --version
-          gcc --version
-
-          cargo fmt --all -- --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PATH = "${{ github.workspace }}\install\bin;" + $env:PATH
           cargo clippy --target x86_64-pc-windows-gnu --lib --bins --tests -- -D warnings
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --target x86_64-pc-windows-gnu --lib --bins --tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --target x86_64-pc-windows-gnu --lib --bins
           exit $LASTEXITCODE
-
-  # ─── Release: package install/ tarballs and publish to GitHub ──
-  release:
-    name: release (publish tarballs)
-    runs-on: ubuntu-latest
-    needs: [linux, macos, windows-build, windows]
-    if: github.event_name == 'push'
-    permissions:
-      contents: write
-    concurrency:
-      group: ffmpeg-release-${{ github.ref }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout (shallow)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Download Linux install
-        uses: actions/download-artifact@v4
-        with:
-          name: ffmpeg-linux-install
-          path: dist/linux/install
-
-      - name: Download macOS install (x86_64)
-        # TODO: re-enable when x86_64 cross-compilation is wired up
-        if: false
-        uses: actions/download-artifact@v4
-        with:
-          name: ffmpeg-macos-x86_64-install
-          path: dist/macos-x86_64/install
-
-      - name: Download macOS install (arm64)
-        uses: actions/download-artifact@v4
-        with:
-          name: ffmpeg-macos-arm64-install
-          path: dist/macos-arm64/install
-
-      - name: Download Windows install
-        uses: actions/download-artifact@v4
-        with:
-          name: ffmpeg-windows-install
-          path: dist/windows/install-windows
-
-      - name: Download Windows binding
-        uses: actions/download-artifact@v4
-        with:
-          name: ffmpeg-windows-binding
-          path: dist/windows/ffmpeg-binding-windows
-
-      - name: Resolve jellyfin-ffmpeg HEAD sha
-        id: ffmpeg_head
-        run: |
-          set -euo pipefail
-          sha=$(git ls-remote https://github.com/jellyfin/jellyfin-ffmpeg.git "refs/heads/${FFMPEG_REF}" | awk '{print $1}')
-          if [ -z "$sha" ]; then
-            sha=$(git ls-remote https://github.com/jellyfin/jellyfin-ffmpeg.git "refs/tags/${FFMPEG_REF}" | awk '{print $1}')
-          fi
-          [ -n "$sha" ] || { echo "Could not resolve FFMPEG_REF=$FFMPEG_REF"; exit 1; }
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-
-      - name: Determine release tag/mode
-        id: meta
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            tag="${GITHUB_REF#refs/tags/}"
-            prerelease=false
-            make_latest=true
-          else
-            tag="nightly"
-            prerelease=true
-            make_latest=false
-          fi
-          short_sha="${GITHUB_SHA::7}"
-          echo "tag=${tag}"             >> "$GITHUB_OUTPUT"
-          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
-          echo "make_latest=${make_latest}" >> "$GITHUB_OUTPUT"
-          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
-          echo "ffmpeg_ref_sha=${{ steps.ffmpeg_head.outputs.sha }}" >> "$GITHUB_OUTPUT"
-
-      - name: Write META.txt for each platform
-        run: |
-          set -euo pipefail
-          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          ffmpeg_sha="${{ steps.ffmpeg_head.outputs.sha }}"
-          crate_sha="${GITHUB_SHA}"
-          for entry in \
-            "linux:dist/linux/install" \
-            "macos-arm64:dist/macos-arm64/install" \
-            "windows:dist/windows/install-windows"; do
-            platform="${entry%%:*}"
-            target_dir="${entry#*:}"
-            cat > "${target_dir}/META.txt" <<META
-          ffmpeg_ref=${FFMPEG_REF}
-          ffmpeg_ref_sha=${ffmpeg_sha}
-          crate_sha=${crate_sha}
-          built_at=${built_at}
-          platform=${platform}
-          META
-          done
-
-      - name: Make .pc files relocatable
-        run: |
-          set -euo pipefail
-          # Rewrite prefix= in pkg-config files so downstream consumers can
-          # extract the tarball to any path. ${pcfiledir} is pkg-config's
-          # builtin for "directory containing this .pc file"; our layout is
-          # install/lib/pkgconfig/*.pc, so ../.. resolves back to install/.
-          for dir in dist/linux/install dist/macos-arm64/install dist/windows/install-windows; do
-            pcdir="${dir}/lib/pkgconfig"
-            if [ -d "$pcdir" ]; then
-              for pc in "$pcdir"/*.pc; do
-                [ -e "$pc" ] || continue
-                sed -i \
-                  -e 's|^prefix=.*|prefix=${pcfiledir}/../..|' \
-                  -e 's|^libdir=.*|libdir=${prefix}/lib|' \
-                  -e 's|^includedir=.*|includedir=${prefix}/include|' \
-                  "$pc"
-              done
-              echo "Rewrote prefix/libdir/includedir in ${pcdir}:"
-              grep -HE '^(prefix|libdir|includedir)=' "$pcdir"/*.pc || true
-            else
-              echo "No pkgconfig dir at ${pcdir}, skipping"
-            fi
-          done
-
-      - name: Install zstd and package tarballs
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends zstd
-          ( cd dist/linux         && tar --zstd -cf ../install-linux.tar.zst          install )
-          ( cd dist/macos-arm64   && tar --zstd -cf ../install-macos-arm64.tar.zst    install )
-          ( cd dist/windows       && tar --zstd -cf ../install-windows.tar.zst        install-windows ffmpeg-binding-windows )
-          ls -la dist/*.tar.zst
-
-      - name: Delete previous nightly release (if any)
-        if: steps.meta.outputs.tag == 'nightly'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release delete nightly --cleanup-tag --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          prerelease: ${{ steps.meta.outputs.prerelease }}
-          make_latest: ${{ steps.meta.outputs.make_latest }}
-          name: ${{ steps.meta.outputs.tag == 'nightly' && format('Nightly ({0})', steps.meta.outputs.short_sha) || steps.meta.outputs.tag }}
-          body: |
-            Pre-built FFmpeg artifacts.
-            - jellyfin-ffmpeg ref: ${{ steps.meta.outputs.ffmpeg_ref_sha }}
-            - crate commit: ${{ github.sha }}
-          files: |
-            dist/install-linux.tar.zst
-            dist/install-macos-arm64.tar.zst
-            dist/install-windows.tar.zst

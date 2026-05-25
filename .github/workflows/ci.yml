@@ -12,7 +12,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: stable
-  TOKIMO_LIB_VERSION: v1.1.0
+  TOKIMO_LIB_VERSION: v1.1.2
   FFMPEG_LINK_MODE: dynamic
 
 jobs:

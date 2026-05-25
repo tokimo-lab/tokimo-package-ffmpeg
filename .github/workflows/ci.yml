@@ -135,7 +135,6 @@ jobs:
         env:
           FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
           FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/install/include
-          FFMPEG_DYN_DIR: ${{ github.workspace }}/install/lib
           FFMPEG_LIBS_DIR: ${{ github.workspace }}/install/lib
           FFMPEG_LINK_MODE: dynamic
           LD_LIBRARY_PATH: ${{ github.workspace }}/install/lib
@@ -148,7 +147,6 @@ jobs:
         env:
           FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}/install/lib/pkgconfig
           FFMPEG_INCLUDE_DIR: ${{ github.workspace }}/install/include
-          FFMPEG_DYN_DIR: ${{ github.workspace }}/install/lib
           FFMPEG_LIBS_DIR: ${{ github.workspace }}/install/lib
           FFMPEG_LINK_MODE: dynamic
           LD_LIBRARY_PATH: ${{ github.workspace }}/install/lib
@@ -162,7 +160,6 @@ jobs:
         env:
           FFMPEG_PKG_CONFIG_PATH: ${{ github.workspace }}\install\lib\pkgconfig
           FFMPEG_INCLUDE_DIR: ${{ github.workspace }}\install\include
-          FFMPEG_DYN_DIR: ${{ github.workspace }}\install\lib
           FFMPEG_LIBS_DIR: ${{ github.workspace }}\install\lib
           FFMPEG_DLL_PATH: ${{ github.workspace }}\install\bin
           FFMPEG_LINK_MODE: dynamic

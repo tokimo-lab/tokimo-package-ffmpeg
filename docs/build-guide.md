@@ -78,7 +78,6 @@ The Makefile automatically sets these for Rust compilation:
 ```bash
 FFMPEG_PKG_CONFIG_PATH="./install/lib/pkgconfig"   # rsmpeg finds FFmpeg headers
 FFMPEG_INCLUDE_DIR="./install/include"               # FFI header location
-FFMPEG_DYN_DIR="./install/lib"                       # Shared library location
 LD_LIBRARY_PATH="./install/lib:./install/deps"       # Runtime library search
 ```
 

@@ -111,7 +111,6 @@ clean-all: clean ## 清理所有 (含源码、patches、rsmpeg)
 FFMPEG_ENV = \
 	FFMPEG_PKG_CONFIG_PATH="$(INSTALL_DIR)/lib/pkgconfig" \
 	FFMPEG_INCLUDE_DIR="$(INSTALL_DIR)/include" \
-	FFMPEG_DYN_DIR="$(INSTALL_DIR)/lib" \
 	LD_LIBRARY_PATH="$(INSTALL_DIR)/lib:$(INSTALL_DIR)/deps$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}"
 
 # ─── Docker build ────────────────────────────────────────────────

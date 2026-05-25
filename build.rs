@@ -56,9 +56,6 @@ fn main() {
                 }
             }
 
-            if std::env::var("FFMPEG_DYN_DIR").is_err() {
-                println!("cargo:rustc-env=FFMPEG_DYN_DIR={}", lib_dir.display());
-            }
             // rusty_ffmpeg honors FFMPEG_LIBS_DIR as the explicit-path linking method
             // (bypassing pkg-config / vcpkg feature flags). Setting it here lets the
             // crate work uniformly on Windows-MSVC without the `link_vcpkg_ffmpeg`

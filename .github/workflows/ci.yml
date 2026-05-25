@@ -84,7 +84,7 @@ jobs:
           test -d install/bin
           test -d install/lib
           test -d install/include
-          ls -la install/bin install/lib install/include | head -80
+          ls -la install/bin install/lib install/include | head -80 || true
 
       - name: Set up Rust toolchain (Unix)
         if: runner.os != 'Windows'

@@ -533,7 +533,9 @@ pub(crate) fn probe_format_ctx(input_ctx: AVFormatContextInput, filename_hint: &
                     "1:1".to_string()
                 };
                 let dar_str = compute_dar(codecpar.width, codecpar.height, sar);
+                #[allow(clippy::unnecessary_cast)] // cast required on Windows-MSVC, redundant on Linux
                 let field_order = unsafe { field_order_name((*codecpar.as_ptr()).field_order as i32) };
+                #[allow(clippy::unnecessary_cast)]
                 let chroma_loc = unsafe { chroma_location_name((*codecpar.as_ptr()).chroma_location as i32) };
 
                 // coded_width/coded_height from opened decoder (more accurate with cropping)
@@ -562,9 +564,13 @@ pub(crate) fn probe_format_ctx(input_ctx: AVFormatContextInput, filename_hint: &
                     coded_height: ch,
                     pixel_format: pix_fmt_name,
                     level: codecpar.level,
+                    #[allow(clippy::unnecessary_cast)] // cast required on Windows-MSVC, redundant on Linux
                     color_range: color_range_name(codecpar.color_range as i32),
+                    #[allow(clippy::unnecessary_cast)]
                     color_space: color_space_name(codecpar.color_space as i32),
+                    #[allow(clippy::unnecessary_cast)]
                     color_primaries: color_primaries_name(codecpar.color_primaries as i32),
+                    #[allow(clippy::unnecessary_cast)]
                     color_transfer: color_transfer_name(codecpar.color_trc as i32),
                     display_aspect_ratio: dar_str,
                     sample_aspect_ratio: sar_str,

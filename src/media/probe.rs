@@ -806,14 +806,55 @@ fn detect_hdr10_plus(streams: &mut [StreamInfo], mut input_ctx: AVFormatContextI
     }
 }
 
+/// Decode a CStr to a Rust String, handling non-UTF-8 byte sequences.
+///
+/// FFmpeg's AVDictionary stores tag values as C strings. For ID3v1 tags and
+/// some ID3v2 tags, the bytes may be Latin-1, GBK, or other legacy encodings
+/// rather than UTF-8. We try encodings in order of likelihood:
+/// 1. UTF-8 (fast path — most modern tags)
+/// 2. GBK (common for Chinese ID3v1 tags)
+/// 3. Latin-1 (ID3v1 default, FFmpeg fallback)
+fn decode_cstr_lossy(cstr: &CStr) -> String {
+    // Fast path: valid UTF-8
+    if let Ok(s) = cstr.to_str() {
+        // Even valid UTF-8 may contain Latin-1 chars from FFmpeg's ID3v1 handling.
+        // If all non-ASCII chars are in the Latin-1 range (U+0080..U+00FF) and the
+        // string looks like mojibake (Latin-1 interpretation of GBK bytes), try
+        // re-interpreting as GBK.
+        if s.chars().any(|c| (c as u32) >= 0x80 && (c as u32) <= 0xFF) {
+            let latin1_bytes: Vec<u8> = s.chars().map(|c| c as u32 as u8).collect();
+            let (gbk_decoded, _, gbk_had_errors) = encoding_rs::GBK.decode(&latin1_bytes);
+            if !gbk_had_errors && gbk_decoded.chars().all(|c| !c.is_control() || c == '\t' || c == '\n') {
+                return gbk_decoded.into_owned();
+            }
+        }
+        return s.to_owned();
+    }
+    let bytes = cstr.to_bytes();
+    if bytes.is_empty() {
+        return String::new();
+    }
+    // Try GBK decoding (superset of GB2312, common for Chinese MP3 tags).
+    // GBK produces replacement character U+FFFD for invalid byte sequences,
+    // so if the result contains no replacements, it's likely correct.
+    let (gbk_decoded, _, gbk_had_errors) = encoding_rs::GBK.decode(bytes);
+    if !gbk_had_errors {
+        return gbk_decoded.into_owned();
+    }
+    // Fallback: Latin-1 (ISO-8859-1) — every byte 0x00-0xFF is valid.
+    // This is the default for ID3v1 and FFmpeg's demuxer fallback.
+    let mut output = String::with_capacity(bytes.len());
+    for &b in bytes {
+        output.push(b as char);
+    }
+    output
+}
+
 fn extract_tags(metadata: Option<rsmpeg::avutil::AVDictionaryRef>) -> BTreeMap<String, String> {
     let mut tags = BTreeMap::new();
     if let Some(dict) = metadata {
         for entry in dict.iter() {
-            tags.insert(
-                entry.key().to_string_lossy().into_owned(),
-                entry.value().to_string_lossy().into_owned(),
-            );
+            tags.insert(decode_cstr_lossy(entry.key()), decode_cstr_lossy(entry.value()));
         }
     }
     tags
@@ -853,8 +894,8 @@ fn extract_chapters(input_ctx: &AVFormatContextInput) -> Vec<ChapterInfo> {
                     if prev.is_null() {
                         break;
                     }
-                    let k = CStr::from_ptr((*prev).key).to_string_lossy().into_owned();
-                    let v = CStr::from_ptr((*prev).value).to_string_lossy().into_owned();
+                    let k = decode_cstr_lossy(CStr::from_ptr((*prev).key));
+                    let v = decode_cstr_lossy(CStr::from_ptr((*prev).value));
                     tags.insert(k, v);
                 }
             }

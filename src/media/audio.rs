@@ -5,7 +5,7 @@
 //!
 //! Uses temp files for I/O (simpler than custom AVIO for this low-frequency use case).
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, ResultExt};
 use rsmpeg::{
     avcodec::{AVCodec, AVCodecContext},
     avfilter::{AVFilter, AVFilterGraph, AVFilterInOut},
@@ -247,10 +247,16 @@ fn init_audio_resample_filter<'a>(
         dec_ctx.pkt_timebase.num,
         dec_ctx.pkt_timebase.den,
         dec_ctx.sample_rate,
-        get_sample_fmt_name(dec_ctx.sample_fmt).unwrap().to_string_lossy(),
-        dec_ctx.ch_layout().describe().unwrap().to_string_lossy(),
+        get_sample_fmt_name(dec_ctx.sample_fmt)
+            .context("invalid sample format")?
+            .to_string_lossy(),
+        dec_ctx
+            .ch_layout()
+            .describe()
+            .context("failed to describe channel layout")?
+            .to_string_lossy(),
     );
-    let src_args_c = CString::new(src_args).unwrap();
+    let src_args_c = CString::new(src_args)?;
 
     let mut src_ctx = filter_graph.create_filter_context(&buffersrc, c"in", Some(&src_args_c))?;
 
@@ -258,19 +264,27 @@ fn init_audio_resample_filter<'a>(
         .alloc_filter_context(&buffersink, c"out")
         .ok_or_else(|| Error::Other("Cannot create audio buffer sink".into()))?;
     sink_ctx.opt_set_bin(c"sample_fmts", &target_sample_fmt)?;
-    sink_ctx.opt_set(c"ch_layouts", &target_ch_layout.describe().unwrap())?;
+    sink_ctx.opt_set(
+        c"ch_layouts",
+        &target_ch_layout
+            .describe()
+            .context("failed to describe target channel layout")?,
+    )?;
     sink_ctx.opt_set_bin(c"sample_rates", &target_sample_rate)?;
     sink_ctx.init_dict(&mut None)?;
 
     let target_fmt_name = get_sample_fmt_name(target_sample_fmt)
-        .unwrap()
+        .context("invalid target sample format")?
         .to_string_lossy()
         .to_string();
-    let target_ch_desc = target_ch_layout.describe().unwrap().to_string_lossy().to_string();
+    let target_ch_desc = target_ch_layout
+        .describe()
+        .context("failed to describe target channel layout")?
+        .to_string_lossy()
+        .to_string();
     let filter_spec = CString::new(format!(
         "aformat=sample_fmts={target_fmt_name}:channel_layouts={target_ch_desc}:sample_rates={target_sample_rate}"
-    ))
-    .unwrap();
+    ))?;
 
     let outputs = AVFilterInOut::new(c"in", &mut src_ctx, 0);
     let inputs = AVFilterInOut::new(c"out", &mut sink_ctx, 0);

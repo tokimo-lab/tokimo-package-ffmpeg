@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{Result, ResultExt};
 use rsmpeg::{avformat::AVFormatContextOutput, avutil::AVFrame};
 use std::sync::atomic::Ordering;
 
@@ -39,9 +39,13 @@ pub(super) fn flush_and_finalize(
                         continue; // already handled by threads
                     }
                     let is_gpu = targets.video[i].as_ref().is_some_and(|t| t.gpu_pipeline);
-                    let dec_ctx = dec_ctxs[i].as_mut().unwrap();
-                    let enc_ctx = pipeline.enc_contexts[i].as_mut().unwrap();
-                    let fp = pipeline.filter_pipelines[i].as_mut().unwrap();
+                    let dec_ctx = dec_ctxs[i].as_mut().context("decode context missing during flush")?;
+                    let enc_ctx = pipeline.enc_contexts[i]
+                        .as_mut()
+                        .context("encoder context missing during flush")?;
+                    let fp = pipeline.filter_pipelines[i]
+                        .as_mut()
+                        .context("filter pipeline missing during flush")?;
 
                     let _ = dec_ctx.send_packet(None);
                     loop {

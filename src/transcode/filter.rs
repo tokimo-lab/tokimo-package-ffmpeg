@@ -1,4 +1,4 @@
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, ResultExt};
 use rsmpeg::{
     avcodec::AVCodecContext,
     avfilter::{AVFilter, AVFilterContextMut, AVFilterGraph, AVFilterInOut},
@@ -87,7 +87,7 @@ pub fn init_video_filter<'graph>(
         dec_ctx.sample_aspect_ratio.num.max(1),
         dec_ctx.sample_aspect_ratio.den.max(1),
     );
-    let args = CString::new(args).unwrap();
+    let args = CString::new(args)?;
 
     let mut buffersrc_ctx = filter_graph.create_filter_context(&buffersrc, c"in", Some(&args))?;
 
@@ -99,11 +99,11 @@ pub fn init_video_filter<'graph>(
     buffersink_ctx.init_dict(&mut None)?;
 
     let filter_spec = if let Some(custom) = custom_filter {
-        CString::new(custom).unwrap()
+        CString::new(custom)?
     } else if let Some((w, h)) = resolution {
-        CString::new(format!("scale={w}:{h}")).unwrap()
+        CString::new(format!("scale={w}:{h}"))?
     } else {
-        CString::new("null").unwrap()
+        CString::new("null")?
     };
     tracing::debug!("[filter] SW filter spec: {:?}", filter_spec);
 
@@ -174,7 +174,7 @@ pub fn init_video_filter_hw<'graph>(
         dec_ctx.sample_aspect_ratio.num.max(1),
         dec_ctx.sample_aspect_ratio.den.max(1),
     );
-    let args = CString::new(args).unwrap();
+    let args = CString::new(args)?;
 
     let mut buffersrc_ctx = filter_graph.create_filter_context(&buffersrc, c"in", Some(&args))?;
 
@@ -202,7 +202,7 @@ pub fn init_video_filter_hw<'graph>(
     // Build the filter spec string based on backend type
     let filter_spec = build_filter_spec(params);
     tracing::debug!("[filter] HW filter spec: {}", filter_spec);
-    let filter_spec_c = CString::new(filter_spec.as_str()).unwrap();
+    let filter_spec_c = CString::new(filter_spec.as_str())?;
 
     let outputs = AVFilterInOut::new(c"in", &mut buffersrc_ctx, 0);
     let inputs = AVFilterInOut::new(c"out", &mut buffersink_ctx, 0);
@@ -385,10 +385,16 @@ pub fn init_audio_filter<'graph>(
         dec_ctx.pkt_timebase.num,
         dec_ctx.pkt_timebase.den,
         dec_ctx.sample_rate,
-        get_sample_fmt_name(dec_ctx.sample_fmt).unwrap().to_string_lossy(),
-        dec_ctx.ch_layout().describe().unwrap().to_string_lossy(),
+        get_sample_fmt_name(dec_ctx.sample_fmt)
+            .context("invalid sample format")?
+            .to_string_lossy(),
+        dec_ctx
+            .ch_layout()
+            .describe()
+            .context("failed to describe channel layout")?
+            .to_string_lossy(),
     );
-    let args = CString::new(args).unwrap();
+    let args = CString::new(args)?;
 
     let mut buffersrc_ctx = filter_graph.create_filter_context(&buffersrc, c"in", Some(&args))?;
 
@@ -397,7 +403,12 @@ pub fn init_audio_filter<'graph>(
         .ok_or_else(|| Error::Other("Cannot create buffer sink".into()))?;
 
     buffersink_ctx.opt_set_bin(c"sample_fmts", &target_sample_fmt)?;
-    buffersink_ctx.opt_set(c"ch_layouts", &target_ch_layout.describe().unwrap())?;
+    buffersink_ctx.opt_set(
+        c"ch_layouts",
+        &target_ch_layout
+            .describe()
+            .context("failed to describe target channel layout")?,
+    )?;
     buffersink_ctx.opt_set_bin(c"sample_rates", &target_sample_rate)?;
     buffersink_ctx.init_dict(&mut None)?;
 
@@ -405,14 +416,18 @@ pub fn init_audio_filter<'graph>(
     let inputs = AVFilterInOut::new(c"out", &mut buffersink_ctx, 0);
 
     let target_fmt_name = get_sample_fmt_name(target_sample_fmt)
-        .unwrap()
+        .context("invalid target sample format")?
         .to_string_lossy()
         .to_string();
-    let target_ch_desc = target_ch_layout.describe().unwrap().to_string_lossy().to_string();
+    let target_ch_desc = target_ch_layout
+        .describe()
+        .context("failed to describe target channel layout")?
+        .to_string_lossy()
+        .to_string();
     let filter_spec = format!(
         "aformat=sample_fmts={target_fmt_name}:channel_layouts={target_ch_desc}:sample_rates={target_sample_rate},asetnsamples=n=1024:p=1"
     );
-    let filter_spec_c = CString::new(filter_spec).unwrap();
+    let filter_spec_c = CString::new(filter_spec)?;
 
     let (_inputs, _outputs) = filter_graph.parse_ptr(&filter_spec_c, Some(inputs), Some(outputs))?;
     filter_graph.config()?;

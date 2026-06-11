@@ -91,12 +91,18 @@ impl MuxScheduler {
 
     #[cold]
     fn throttle_slow(&self, out_stream_idx: usize, dts_us: i64) {
-        let mut guard = self.lock.lock().unwrap();
+        let mut guard = self.lock.lock().unwrap_or_else(|e| {
+            tracing::warn!("scheduler mutex poisoned, recovering: {e}");
+            e.into_inner()
+        });
         loop {
             if self.gap_ok(out_stream_idx, dts_us) {
                 return;
             }
-            (guard, _) = self.notify.wait_timeout(guard, WAIT_TIMEOUT).unwrap();
+            (guard, _) = self.notify.wait_timeout(guard, WAIT_TIMEOUT).unwrap_or_else(|e| {
+                tracing::error!("scheduler condvar wait_timeout failed: {e}");
+                e.into_inner()
+            });
         }
     }
 

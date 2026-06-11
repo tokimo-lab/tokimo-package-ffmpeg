@@ -5,7 +5,7 @@
 //!
 //! Handles HEIC tile grid assembly (stream groups) for `FFmpeg` 7.0+.
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, ResultExt};
 use rsmpeg::{
     avcodec::{AVCodec, AVCodecContext},
     avfilter::{AVFilter, AVFilterGraph, AVFilterInOut},
@@ -341,7 +341,7 @@ fn decode_tile_grid(mut input_ctx: AVFormatContextInput, tg: &TileGridInfo) -> R
 
     // All tiles are decoded. Now composite onto canvas.
     // First, determine the pixel format from the first tile.
-    let first_tile = decoded_frames[0].as_ref().unwrap();
+    let first_tile = decoded_frames[0].as_ref().context("first tile frame is missing")?;
     let pix_fmt = first_tile.format;
 
     // Create canvas frame
@@ -479,7 +479,7 @@ fn crop_frame(frame: &AVFrame, x: i32, y: i32, w: i32, h: i32, _pix_fmt: i32) ->
         "video_size={}x{}:pix_fmt={}:time_base=1/1:pixel_aspect=1/1",
         frame.width, frame.height, frame.format
     );
-    let src_args_c = CString::new(src_args).unwrap();
+    let src_args_c = CString::new(src_args)?;
 
     let mut buffersrc_ctx = filter_graph.create_filter_context(&buffersrc, c"in", Some(&src_args_c))?;
 
@@ -488,7 +488,7 @@ fn crop_frame(frame: &AVFrame, x: i32, y: i32, w: i32, h: i32, _pix_fmt: i32) ->
         .ok_or_else(|| Error::Other("Cannot create buffer sink".into()))?;
     buffersink_ctx.init_dict(&mut None)?;
 
-    let crop_spec = CString::new(format!("crop={w}:{h}:{x}:{y}")).unwrap();
+    let crop_spec = CString::new(format!("crop={w}:{h}:{x}:{y}"))?;
 
     let outputs = AVFilterInOut::new(c"in", &mut buffersrc_ctx, 0);
     let inputs = AVFilterInOut::new(c"out", &mut buffersink_ctx, 0);
@@ -552,7 +552,7 @@ pub(crate) fn apply_scale_filter(
         "video_size={}x{}:pix_fmt={}:time_base=1/1:pixel_aspect=1/1",
         frame.width, frame.height, frame.format
     );
-    let src_args_c = CString::new(src_args).unwrap();
+    let src_args_c = CString::new(src_args)?;
 
     let mut buffersrc_ctx = filter_graph.create_filter_context(&buffersrc, c"in", Some(&src_args_c))?;
 
@@ -563,10 +563,10 @@ pub(crate) fn apply_scale_filter(
     buffersink_ctx.init_dict(&mut None)?;
 
     let filter_spec = match (target_width, target_height) {
-        (Some(w), Some(h)) => CString::new(format!("scale={w}:{h}")).unwrap(),
-        (Some(w), None) => CString::new(format!("scale={w}:-1")).unwrap(),
-        (None, Some(h)) => CString::new(format!("scale=-1:{h}")).unwrap(),
-        (None, None) => CString::new("null").unwrap(),
+        (Some(w), Some(h)) => CString::new(format!("scale={w}:{h}"))?,
+        (Some(w), None) => CString::new(format!("scale={w}:-1"))?,
+        (None, Some(h)) => CString::new(format!("scale=-1:{h}"))?,
+        (None, None) => CString::new("null")?,
     };
 
     let outputs = AVFilterInOut::new(c"in", &mut buffersrc_ctx, 0);
@@ -584,7 +584,7 @@ pub(crate) fn apply_scale_filter(
 
 pub(crate) fn encode_image_frame(frame: &AVFrame, opts: &ImageDecodeOptions) -> Result<Vec<u8>> {
     let encoder_name = opts.format.encoder_name();
-    let c_name = CString::new(encoder_name).unwrap();
+    let c_name = CString::new(encoder_name)?;
     let encoder =
         AVCodec::find_encoder_by_name(&c_name).ok_or_else(|| Error::Other("Image encoder not found".into()))?;
 
@@ -605,7 +605,7 @@ pub(crate) fn encode_image_frame(frame: &AVFrame, opts: &ImageDecodeOptions) -> 
         }
         ImageFormat::WebP => {
             // libwebp uses "quality" option
-            let q_str = CString::new(opts.quality.to_string()).unwrap();
+            let q_str = CString::new(opts.quality.to_string())?;
             let enc_opts = Some(rsmpeg::avutil::AVDictionary::new(c"quality", &q_str, 0));
             enc_ctx.open(enc_opts)?;
             // Skip the open below

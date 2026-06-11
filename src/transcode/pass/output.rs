@@ -39,15 +39,15 @@ pub(super) fn configure_output(
 
     // ── Muxer options ────────────────────────────────────────────────────
     let queue_size = if opts.hls.is_some() { "2048" } else { "128" };
-    let queue_size_c = CString::new(queue_size).unwrap();
+    let queue_size_c = CString::new(queue_size)?;
     let mut mux_dict = AVDictionary::new(c"max_muxing_queue_size", &queue_size_c, 0);
 
     // HLS muxer options
     if let Some(ref hls) = opts.hls {
-        let seg_dur = CString::new(hls.segment_duration.to_string()).unwrap();
-        let start_num = CString::new(hls.start_number.to_string()).unwrap();
-        let playlist_type = CString::new(hls.playlist_type.as_str()).unwrap();
-        let seg_pattern = CString::new(hls.segment_pattern.as_str()).unwrap();
+        let seg_dur = CString::new(hls.segment_duration.to_string())?;
+        let start_num = CString::new(hls.start_number.to_string())?;
+        let playlist_type = CString::new(hls.playlist_type.as_str())?;
+        let seg_pattern = CString::new(hls.segment_pattern.as_str())?;
 
         mux_dict = mux_dict
             .set(c"hls_time", &seg_dur, 0)
@@ -58,7 +58,7 @@ pub(super) fn configure_output(
 
         match hls.segment_type {
             HlsSegmentType::Fmp4 => {
-                let init_fn = CString::new(hls.init_filename.as_str()).unwrap();
+                let init_fn = CString::new(hls.init_filename.as_str())?;
                 mux_dict = mux_dict
                     .set(c"hls_segment_type", c"fmp4", 0)
                     .set(c"hls_fmp4_init_filename", &init_fn, 0)

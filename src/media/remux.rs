@@ -114,7 +114,11 @@ pub fn remux(opts: &RemuxOptions) -> Result<()> {
         // container (e.g. WebM VP9 → MP4 vp09). Without this, a tag from the
         // source container may be carried over and confuse the muxer.
         unsafe {
-            (*out_stream.as_mut_ptr()).codecpar.as_mut().unwrap().codec_tag = 0;
+            (*out_stream.as_mut_ptr())
+                .codecpar
+                .as_mut()
+                .ok_or_else(|| Error::Other("output stream codecpar is null".into()))?
+                .codec_tag = 0;
         }
 
         // Copy stream tags
@@ -161,8 +165,8 @@ pub fn remux(opts: &RemuxOptions) -> Result<()> {
                 }
 
                 if let Some(lang) = &opts.subtitle_language {
-                    let c_key = CString::new("language").unwrap();
-                    let c_val = CString::new(lang.as_str()).unwrap();
+                    let c_key = CString::new("language")?;
+                    let c_val = CString::new(lang.as_str())?;
                     unsafe {
                         let out_ptr = out_stream.as_mut_ptr();
                         ffi::av_dict_set(&raw mut (*out_ptr).metadata, c_key.as_ptr(), c_val.as_ptr(), 0);
@@ -236,8 +240,8 @@ pub fn remux(opts: &RemuxOptions) -> Result<()> {
 
     // Set global metadata
     for (key, value) in &opts.metadata {
-        let c_key = CString::new(key.as_str()).unwrap();
-        let c_val = CString::new(value.as_str()).unwrap();
+        let c_key = CString::new(key.as_str())?;
+        let c_val = CString::new(value.as_str())?;
         unsafe {
             let out_ptr = output_ctx.as_mut_ptr();
             ffi::av_dict_set(&raw mut (*out_ptr).metadata, c_key.as_ptr(), c_val.as_ptr(), 0);
@@ -351,7 +355,11 @@ pub fn merge_av(video: &Path, audio: &Path, output: &Path) -> Result<()> {
         // av01) instead of inheriting a potentially incompatible tag from the
         // source container (WebM/MKV).
         unsafe {
-            (*out_stream.as_mut_ptr()).codecpar.as_mut().unwrap().codec_tag = 0;
+            (*out_stream.as_mut_ptr())
+                .codecpar
+                .as_mut()
+                .ok_or_else(|| Error::Other("output stream codecpar is null".into()))?
+                .codec_tag = 0;
         }
         stream_map.push((0, i, out_idx));
         out_idx += 1;
@@ -367,7 +375,11 @@ pub fn merge_av(video: &Path, audio: &Path, output: &Path) -> Result<()> {
         out_stream.set_codecpar(codecpar.clone());
         out_stream.set_time_base(stream.time_base);
         unsafe {
-            (*out_stream.as_mut_ptr()).codecpar.as_mut().unwrap().codec_tag = 0;
+            (*out_stream.as_mut_ptr())
+                .codecpar
+                .as_mut()
+                .ok_or_else(|| Error::Other("output stream codecpar is null".into()))?
+                .codec_tag = 0;
         }
         stream_map.push((1, i, out_idx));
         out_idx += 1;

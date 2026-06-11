@@ -1,4 +1,4 @@
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, ResultExt};
 use rsmpeg::{
     avcodec::{AVCodec, AVCodecContext},
     avformat::{AVFormatContextInput, AVFormatContextOutput},
@@ -106,8 +106,8 @@ fn init_sw_filters(
                 // Placeholder — GPU init (Phase C) will fill this slot.
             }
             StreamMapping::Video { .. } => {
-                let vtargets = targets.video[i].as_ref().unwrap();
-                let dec_ctx = dec_ctxs[i].as_ref().unwrap();
+                let vtargets = targets.video[i].as_ref().context("video targets missing")?;
+                let dec_ctx = dec_ctxs[i].as_ref().context("decode context missing for video")?;
                 let custom = opts.video_filter.as_deref();
                 tracing::debug!(
                     "[transcode]   SW video filter init: target_pix_fmt={}, resolution={:?}, custom={:?}",
@@ -124,8 +124,8 @@ fn init_sw_filters(
                 filter_pipelines[i] = Some(owned);
             }
             StreamMapping::Audio { .. } => {
-                let atargets = targets.audio[i].as_ref().unwrap();
-                let dec_ctx_mut = dec_ctxs[i].as_mut().unwrap();
+                let atargets = targets.audio[i].as_ref().context("audio targets missing")?;
+                let dec_ctx_mut = dec_ctxs[i].as_mut().context("decode context missing for audio")?;
                 let mut fg = AVFilterGraph::new();
                 let pipeline = filter::init_audio_filter(
                     &mut fg,
@@ -174,7 +174,9 @@ fn init_sw_encoders(
             } => {
                 // GPU placeholder stream — codecpar filled by gpu::init_gpu_pipelines
                 let out_idx = *out_idx;
-                let vtargets = targets.video[i].as_ref().unwrap();
+                let vtargets = targets.video[i]
+                    .as_ref()
+                    .context("video targets missing for GPU stream")?;
                 let mut out_stream = ofmt_ctx.new_stream();
                 unsafe {
                     let cp = (*out_stream.as_mut_ptr()).codecpar;
@@ -187,12 +189,14 @@ fn init_sw_encoders(
             }
             StreamMapping::Video { out_idx, .. } => {
                 let out_idx = *out_idx;
-                let vtargets = targets.video[i].as_ref().unwrap();
+                let vtargets = targets.video[i].as_ref().context("video targets missing")?;
                 let codec_name = &vtargets.codec_name;
                 let c_codec_name = CString::new(codec_name.as_str())?;
                 let encoder = AVCodec::find_encoder_by_name(&c_codec_name)
                     .ok_or_else(|| Error::Other(format!("Encoder '{codec_name}' not found")))?;
-                let dec_ctx = dec_ctxs[i].as_ref().unwrap();
+                let dec_ctx = dec_ctxs[i]
+                    .as_ref()
+                    .context("decode context missing for video encoder")?;
                 let mut enc_ctx = AVCodecContext::new(&encoder);
 
                 enc_ctx.set_width(vtargets.width);
@@ -201,7 +205,11 @@ fn init_sw_encoders(
                 enc_ctx.set_pix_fmt(vtargets.pix_fmt);
                 enc_ctx.set_framerate(dec_ctx.framerate);
 
-                let filter_tb = filter_pipelines[i].as_ref().unwrap().buffersink_ctx.get_time_base();
+                let filter_tb = filter_pipelines[i]
+                    .as_ref()
+                    .context("filter pipeline missing for video encoder")?
+                    .buffersink_ctx
+                    .get_time_base();
                 enc_ctx.set_time_base(filter_tb);
 
                 if let Some(hw) = encode_accel
@@ -213,14 +221,14 @@ fn init_sw_encoders(
                     enc_ctx.set_bit_rate(bitrate);
                 }
 
-                let preset_cstr = CString::new(opts.preset.clone()).unwrap();
+                let preset_cstr = CString::new(opts.preset.clone())?;
                 let mut enc_opts = None;
                 if is_any_hw_encoder(codec_name) || codec_name == "libx264" || codec_name == "libx265" {
                     enc_opts = Some(AVDictionary::new(c"preset", &preset_cstr, 0));
                 }
                 if (codec_name == "libx264" || codec_name == "libx265") && cfg.target_bitrate.is_none() {
                     let crf = opts.crf.unwrap_or(23);
-                    let crf_str = CString::new(crf.to_string()).unwrap();
+                    let crf_str = CString::new(crf.to_string())?;
                     enc_opts = Some(
                         enc_opts
                             .unwrap_or_else(|| AVDictionary::new(c"crf", &crf_str, 0))
@@ -288,7 +296,7 @@ fn init_sw_encoders(
             }
             StreamMapping::Audio { out_idx, .. } => {
                 let out_idx = *out_idx;
-                let atargets = targets.audio[i].as_ref().unwrap();
+                let atargets = targets.audio[i].as_ref().context("audio targets missing")?;
                 let c_codec_name = CString::new(atargets.codec_name.as_str())?;
                 let encoder = AVCodec::find_encoder_by_name(&c_codec_name)
                     .ok_or_else(|| Error::Other(format!("Audio encoder '{}' not found", atargets.codec_name)))?;
@@ -297,7 +305,11 @@ fn init_sw_encoders(
                 enc_ctx.set_sample_rate(atargets.sample_rate);
                 enc_ctx.set_ch_layout(atargets.ch_layout.clone().into_inner());
                 enc_ctx.set_sample_fmt(atargets.sample_fmt);
-                let filter_tb = filter_pipelines[i].as_ref().unwrap().buffersink_ctx.get_time_base();
+                let filter_tb = filter_pipelines[i]
+                    .as_ref()
+                    .context("filter pipeline missing for audio encoder")?
+                    .buffersink_ctx
+                    .get_time_base();
                 enc_ctx.set_time_base(filter_tb);
 
                 if let Some(ref ab) = opts.audio_bitrate {

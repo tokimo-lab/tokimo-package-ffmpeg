@@ -1,6 +1,6 @@
 #[allow(unused_imports)]
 use crate::bail;
-use crate::error::Result;
+use crate::error::{Result, ResultExt};
 use rsmpeg::{
     avcodec::AVPacket,
     avformat::{AVFormatContextInput, AVFormatContextOutput},
@@ -141,9 +141,13 @@ pub(super) fn run_demux_loop(
                 StreamMapping::Audio { out_idx, .. } => *out_idx,
                 _ => unreachable!(),
             };
-            let audio_dec = dec_ctxs[audio_idx].take().unwrap();
-            let audio_fp = pipe.filter_pipelines[audio_idx].take().unwrap();
-            let audio_enc = pipe.enc_contexts[audio_idx].take().unwrap();
+            let audio_dec = dec_ctxs[audio_idx].take().context("audio decode context missing")?;
+            let audio_fp = pipe.filter_pipelines[audio_idx]
+                .take()
+                .context("audio filter pipeline missing")?;
+            let audio_enc = pipe.enc_contexts[audio_idx]
+                .take()
+                .context("audio encoder context missing")?;
             let enc_tb = audio_enc.time_base;
             let out_tb = ofmt_ctx.streams()[audio_out_idx].time_base;
             let audio_seek_pts = seek_pts_per_stream.get(audio_idx).copied().unwrap_or(0);
@@ -182,9 +186,13 @@ pub(super) fn run_demux_loop(
                 StreamMapping::Video { out_idx, .. } => *out_idx,
                 _ => unreachable!(),
             };
-            let video_dec = dec_ctxs[vid_idx].take().unwrap();
-            let video_fp = pipe.filter_pipelines[vid_idx].take().unwrap();
-            let video_enc = pipe.enc_contexts[vid_idx].take().unwrap();
+            let video_dec = dec_ctxs[vid_idx].take().context("video decode context missing")?;
+            let video_fp = pipe.filter_pipelines[vid_idx]
+                .take()
+                .context("video filter pipeline missing")?;
+            let video_enc = pipe.enc_contexts[vid_idx]
+                .take()
+                .context("video encoder context missing")?;
             let enc_tb = video_enc.time_base;
             let out_tb = ofmt_ctx.streams()[vid_out_idx].time_base;
             let video_seek_pts = seek_pts_per_stream[vid_idx];
@@ -343,13 +351,19 @@ pub(super) fn run_demux_loop(
                     let is_gpu = targets.video[in_stream_idx].as_ref().is_some_and(|t| t.gpu_pipeline);
                     let video_seek_pts = seek_pts_per_stream[in_stream_idx];
 
-                    let dec_ctx = dec_ctxs[in_stream_idx].as_mut().unwrap();
+                    let dec_ctx = dec_ctxs[in_stream_idx]
+                        .as_mut()
+                        .context("decode context missing for inline stream")?;
                     dec_ctx.send_packet(Some(&packet)).unwrap_or_else(|e| {
                         tracing::info!("Warning: send_packet failed for stream {}: {:?}", in_stream_idx, e);
                     });
 
-                    let enc_ctx = pipe.enc_contexts[in_stream_idx].as_mut().unwrap();
-                    let fp = pipe.filter_pipelines[in_stream_idx].as_mut().unwrap();
+                    let enc_ctx = pipe.enc_contexts[in_stream_idx]
+                        .as_mut()
+                        .context("encoder context missing for inline stream")?;
+                    let fp = pipe.filter_pipelines[in_stream_idx]
+                        .as_mut()
+                        .context("filter pipeline missing for inline stream")?;
 
                     loop {
                         let frame = match dec_ctx.receive_frame() {

@@ -296,7 +296,10 @@ static GLOBAL_HW_DEVICE_POOL: LazyLock<Mutex<HashMap<HwType, AVHWDeviceContext>>
 /// Subsequent calls return a cheap refcounted clone.
 /// Returns `None` if the hardware is not present or the driver fails to load.
 fn get_pooled_device_ctx(hw_type: HwType) -> Option<AVHWDeviceContext> {
-    let mut pool = GLOBAL_HW_DEVICE_POOL.lock().unwrap();
+    let mut pool = GLOBAL_HW_DEVICE_POOL.lock().unwrap_or_else(|e| {
+        tracing::warn!("hw device pool mutex poisoned, recovering: {e}");
+        e.into_inner()
+    });
     if let Some(ctx) = pool.get(&hw_type) {
         return Some(ctx.clone());
     }

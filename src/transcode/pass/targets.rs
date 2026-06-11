@@ -1,4 +1,4 @@
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, ResultExt};
 use rsmpeg::{
     avcodec::{AVCodec, AVCodecContext},
     avformat::AVFormatContextInput,
@@ -34,20 +34,26 @@ pub(super) fn determine_targets(
                 gpu_pipeline: stream_gpu_pipeline,
                 ..
             } => {
-                let codec_name = cfg.video_codec_name.as_deref().unwrap();
+                let codec_name = cfg.video_codec_name.as_deref().context("video_codec_name not set")?;
                 let c_codec_name = CString::new(codec_name)?;
                 let encoder = AVCodec::find_encoder_by_name(&c_codec_name)
                     .ok_or_else(|| Error::Other(format!("Encoder '{codec_name}' not found")))?;
-                let dec_ctx = dec_ctxs[i].as_ref().unwrap();
+                let dec_ctx = dec_ctxs[i]
+                    .as_ref()
+                    .context("decode context missing for video stream")?;
                 let tmp_enc = AVCodecContext::new(&encoder);
 
                 let (pix_fmt, sw_pix_fmt, gpu_pipeline) =
                     if cfg.encode_hw.is_some_and(|ht| ht.is_hw_encoder(codec_name)) && *stream_gpu_pipeline {
-                        let eht = cfg.encode_hw.unwrap();
-                        let src_sw = cfg
-                            .decode_hw
-                            .unwrap_or(eht)
-                            .sw_format(ifmt_ctx.streams().get(i).unwrap().codecpar().format);
+                        let eht = cfg.encode_hw.context("encode_hw not set for GPU pipeline")?;
+                        let src_sw = cfg.decode_hw.unwrap_or(eht).sw_format(
+                            ifmt_ctx
+                                .streams()
+                                .get(i)
+                                .context("stream index out of bounds")?
+                                .codecpar()
+                                .format,
+                        );
                         let sw =
                             if codec_name.contains("hevc") || codec_name.contains("h265") || codec_name.contains("av1")
                             {
@@ -91,7 +97,9 @@ pub(super) fn determine_targets(
                 let c_codec_name = CString::new(opts.audio_codec.clone())?;
                 let encoder = AVCodec::find_encoder_by_name(&c_codec_name)
                     .ok_or_else(|| Error::Other(format!("Audio encoder '{}' not found", opts.audio_codec)))?;
-                let dec_ctx = dec_ctxs[i].as_ref().unwrap();
+                let dec_ctx = dec_ctxs[i]
+                    .as_ref()
+                    .context("decode context missing for audio stream")?;
                 let tmp_enc = AVCodecContext::new(&encoder);
 
                 let sample_fmt = {

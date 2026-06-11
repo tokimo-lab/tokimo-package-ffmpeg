@@ -354,7 +354,7 @@ fn fourcc_to_string(tag: u32) -> String {
         if b > 0x20 && b < 0x7f {
             result.push(b as char);
         } else {
-            write!(result, "[{b}]").unwrap();
+            write!(result, "[{b}]").expect("write to String");
         }
     }
     result

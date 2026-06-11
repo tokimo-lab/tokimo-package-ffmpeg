@@ -199,14 +199,37 @@ pub(crate) fn open_direct_input(
     probe_opts: &mut Option<rsmpeg::avutil::AVDictionary>,
 ) -> crate::error::Result<AVFormatContextInput> {
     let state = Arc::new(Mutex::new(IoState::new(input.clone())));
-    let _readahead_kb = state.lock().unwrap().readahead_bytes / 1024;
+    let _readahead_kb = state
+        .lock()
+        .unwrap_or_else(|e| {
+            tracing::warn!("mutex poisoned, recovering: {e}");
+            e.into_inner()
+        })
+        .readahead_bytes
+        / 1024;
 
     let state_r = state.clone();
     let state_s = state.clone();
 
-    let read_fn: ReadFn = Box::new(move |_data, buf| state_r.lock().unwrap().read(buf));
+    let read_fn: ReadFn = Box::new(move |_data, buf| {
+        state_r
+            .lock()
+            .unwrap_or_else(|e| {
+                tracing::warn!("read mutex poisoned, recovering: {e}");
+                e.into_inner()
+            })
+            .read(buf)
+    });
 
-    let seek_fn: SeekFn = Box::new(move |_data, offset, whence| state_s.lock().unwrap().seek(offset, whence));
+    let seek_fn: SeekFn = Box::new(move |_data, offset, whence| {
+        state_s
+            .lock()
+            .unwrap_or_else(|e| {
+                tracing::warn!("seek mutex poisoned, recovering: {e}");
+                e.into_inner()
+            })
+            .seek(offset, whence)
+    });
 
     let buffer = AVMem::new(AVIO_BUF_SIZE);
     let custom_io = AVIOContextCustom::alloc_context(
@@ -221,7 +244,8 @@ pub(crate) fn open_direct_input(
     // Pass a filename hint so the MKV demuxer is auto-detected.
     // The URL is not used for I/O when a custom AVIO is provided.
     let filename_hint = input.filename_hint.as_deref().unwrap_or("input.mkv");
-    let c_hint = CString::new(filename_hint).unwrap_or_else(|_| CString::new("input.mkv").unwrap());
+    let c_hint =
+        CString::new(filename_hint).unwrap_or_else(|_| CString::new("input.mkv").expect("constant has no NUL"));
 
     // tracing::debug!(
     //     "[vfs-avio] Opening: size={}MB, hint={}, readahead={}KB",

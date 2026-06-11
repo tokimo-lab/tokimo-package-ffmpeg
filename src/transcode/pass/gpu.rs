@@ -1,4 +1,4 @@
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, ResultExt};
 use rsmpeg::{
     avcodec::{AVCodec, AVCodecContext},
     avfilter::AVFilterGraph,
@@ -143,7 +143,10 @@ pub(super) fn init_gpu_pipelines(
             enc_ctx.set_hw_frames_ctx(enc_frames_ctx);
         } else {
             let hw_fc = unsafe {
-                AVHWFramesContext::from_raw(std::ptr::NonNull::new(ffi::av_buffer_ref(sink_hw_frames_ptr)).unwrap())
+                AVHWFramesContext::from_raw(
+                    std::ptr::NonNull::new(ffi::av_buffer_ref(sink_hw_frames_ptr))
+                        .context("av_buffer_ref returned null")?,
+                )
             };
             enc_ctx.set_hw_frames_ctx(hw_fc);
         }
@@ -151,7 +154,7 @@ pub(super) fn init_gpu_pipelines(
         if let Some(bitrate) = cfg.target_bitrate {
             enc_ctx.set_bit_rate(bitrate);
         }
-        let preset_cstr = CString::new(opts.preset.clone()).unwrap();
+        let preset_cstr = CString::new(opts.preset.clone())?;
         let enc_opts = Some(AVDictionary::new(c"preset", &preset_cstr, 0));
         enc_ctx.set_gop_size(opts.gop.unwrap_or(250));
         unsafe {

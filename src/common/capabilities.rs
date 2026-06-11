@@ -582,7 +582,7 @@ pub fn probe_cuvid_hw_codecs() -> HashSet<String> {
     let mut supported = HashSet::new();
 
     for &(decoder_name, codec_key) in CANDIDATES {
-        let c_name = CString::new(decoder_name).unwrap();
+        let c_name = CString::new(decoder_name).expect("decoder name contains no NUL");
         let Some(codec) = AVCodec::find_decoder_by_name(c_name.as_c_str()) else {
             continue;
         };

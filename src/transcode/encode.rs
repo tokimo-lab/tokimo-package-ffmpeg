@@ -109,8 +109,8 @@ pub fn apply_video_encoder_options(
         }
     }
     if let Some(profile) = profile {
-        let profile_cstr = CString::new(profile).unwrap();
-        let key = CString::new("profile").unwrap();
+        let profile_cstr = CString::new(profile)?;
+        let key = CString::new("profile")?;
         unsafe {
             ffi::av_opt_set(
                 enc_ctx.as_mut_ptr().cast(),

@@ -201,7 +201,10 @@ struct TileOffset {
     vertical: i32,
 }
 
-/// Read tile grid info from the first `TILE_GRID` stream group.
+/// Read the best `TILE_GRID` stream group.
+///
+/// Mirrors the local FFmpeg auto-map patch: prefer the tile grid with the
+/// largest presentation area, with a small bonus for the default disposition.
 fn read_tile_grid_info(input_ctx: &AVFormatContextInput) -> Option<TileGridInfo> {
     unsafe {
         let ctx = input_ctx.as_ptr();
@@ -210,6 +213,7 @@ fn read_tile_grid_info(input_ctx: &AVFormatContextInput) -> Option<TileGridInfo>
             return None;
         }
 
+        let mut best: Option<(i64, TileGridInfo)> = None;
         for g in 0..nb_groups as usize {
             let group = *(*ctx).stream_groups.add(g);
             if (*group).type_ != ffi::AV_STREAM_GROUP_PARAMS_TILE_GRID {
@@ -245,7 +249,14 @@ fn read_tile_grid_info(input_ctx: &AVFormatContextInput) -> Option<TileGridInfo>
             let first_st = *(*group).streams.add(0);
             let codec_id = (*(*first_st).codecpar).codec_id;
 
-            return Some(TileGridInfo {
+            let score = i64::from((*tg).width) * i64::from((*tg).height)
+                + if ((*group).disposition as u32) & ffi::AV_DISPOSITION_DEFAULT != 0 {
+                    5_000_000
+                } else {
+                    0
+                };
+
+            let info = TileGridInfo {
                 nb_tiles,
                 coded_width: (*tg).coded_width,
                 coded_height: (*tg).coded_height,
@@ -256,9 +267,13 @@ fn read_tile_grid_info(input_ctx: &AVFormatContextInput) -> Option<TileGridInfo>
                 tiles,
                 stream_indices,
                 codec_id,
-            });
+            };
+
+            if best.as_ref().is_none_or(|(best_score, _)| score > *best_score) {
+                best = Some((score, info));
+            }
         }
-        None
+        best.map(|(_, info)| info)
     }
 }
 

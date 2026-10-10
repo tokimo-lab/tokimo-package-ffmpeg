@@ -32,7 +32,7 @@ pub(crate) fn setup_session(opts: &TranscodeOptions) -> Result<SessionSetup> {
         .ok_or_else(|| Error::Other("Input path contains invalid UTF-8".into()))?;
     let c_input = CString::new(input_path)?;
 
-    let copy_video = opts.video_codec == "copy";
+    let copy_video = opts.audio_only || opts.video_codec == "copy";
     let copy_audio = opts.audio_codec == "copy";
 
     // ── Hardware acceleration ────────────────────────────────────────────

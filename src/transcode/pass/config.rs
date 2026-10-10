@@ -34,7 +34,7 @@ impl PassConfig {
         let cancel = opts.cancel.clone();
         let resolution = opts.resolution.as_deref().map(parse_resolution).transpose()?;
         let target_bitrate = opts.bitrate.as_deref().map(parse_bitrate).transpose()?;
-        let copy_video = opts.video_codec == "copy";
+        let copy_video = opts.audio_only || opts.video_codec == "copy";
         let copy_audio = opts.audio_codec == "copy";
         let decode_hw = decode_accel.as_ref().map(|h| h.hw_type);
         let encode_hw = encode_accel.as_ref().map(|h| h.hw_type);

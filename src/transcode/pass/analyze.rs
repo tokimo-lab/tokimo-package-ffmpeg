@@ -66,7 +66,7 @@ pub(super) fn seek(ifmt_ctx: &mut AVFormatContextInput, opts: &TranscodeOptions,
 /// Iterate input streams, create decoders, and build the stream mapping.
 pub(super) fn analyze_streams(
     ifmt_ctx: &mut AVFormatContextInput,
-    _opts: &TranscodeOptions,
+    opts: &TranscodeOptions,
     cfg: &PassConfig,
     decode_accel: &Option<HwAccel>,
 ) -> Result<(StreamAnalysis, DecodeContexts)> {
@@ -81,6 +81,14 @@ pub(super) fn analyze_streams(
     for (i, in_stream) in ifmt_ctx.streams().iter().enumerate() {
         let codecpar = in_stream.codecpar();
         let codec_type = codecpar.codec_type();
+
+        if (codec_type.is_video() && opts.audio_only)
+            || (codec_type.is_audio() && opts.audio_stream_index.is_some_and(|index| index as usize != i))
+        {
+            dec_contexts.push(None);
+            stream_map.push(StreamMapping::Ignore);
+            continue;
+        }
 
         let disposition = in_stream.disposition;
         if disposition & ffi::AV_DISPOSITION_ATTACHED_PIC as i32 != 0 {

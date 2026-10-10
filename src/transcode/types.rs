@@ -185,6 +185,10 @@ pub struct TranscodeOptions {
     pub output: PathBuf,
     pub video_codec: String,
     pub audio_codec: String,
+    /// Ignore video streams, including embedded cover images.
+    pub audio_only: bool,
+    /// Raw input stream index for audio; None selects the first audio stream.
+    pub audio_stream_index: Option<u32>,
     pub decode: Option<String>,
     pub filter_backend: Option<String>,
     pub preset: String,
@@ -235,6 +239,8 @@ impl Default for TranscodeOptions {
             output: PathBuf::new(),
             video_codec: "libx264".into(),
             audio_codec: crate::common::capabilities::best_aac_encoder().into(),
+            audio_only: false,
+            audio_stream_index: None,
             decode: None,
             filter_backend: None,
             preset: "medium".into(),

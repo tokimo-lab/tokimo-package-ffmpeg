@@ -7,7 +7,7 @@ use rsmpeg::{
 };
 use std::ffi::CString;
 
-use super::super::encode::{apply_video_encoder_options, parse_bitrate};
+use super::super::encode::{KeyframeForcer, apply_video_encoder_options, enable_forced_idr, parse_bitrate};
 use super::super::filter::{self, OwnedFilterPipeline};
 use super::super::hw::{HwAccel, HwPipeline, is_any_hw_encoder};
 use super::super::types::{StreamMapping, TranscodeOptions};
@@ -24,6 +24,8 @@ use super::targets::StreamTargets;
 pub(super) struct EncodePipeline {
     pub filter_pipelines: Vec<Option<OwnedFilterPipeline>>,
     pub enc_contexts: Vec<Option<AVCodecContext>>,
+    /// Per-video-encoder keyframe forcing (HLS segment alignment).
+    pub kf_forcers: Vec<Option<KeyframeForcer>>,
 }
 
 /// Build the complete encode pipeline: SW filters → encoders → GPU pipelines.
@@ -80,9 +82,20 @@ pub(super) fn create_pipeline(
         &mut enc_contexts,
     )?;
 
+    let kf_forcers = analysis
+        .stream_map
+        .iter()
+        .zip(&enc_contexts)
+        .map(|(mapping, enc)| match (mapping, enc, opts.force_key_frames_interval) {
+            (StreamMapping::Video { .. }, Some(enc), Some(interval)) => KeyframeForcer::new(interval, enc.time_base),
+            _ => None,
+        })
+        .collect();
+
     Ok(EncodePipeline {
         filter_pipelines,
         enc_contexts,
+        kf_forcers,
     })
 }
 
@@ -237,6 +250,9 @@ fn init_sw_encoders(
                 }
 
                 enc_ctx.set_gop_size(opts.gop.unwrap_or(250));
+                if opts.force_key_frames_interval.is_some() {
+                    enable_forced_idr(&mut enc_ctx);
+                }
                 unsafe {
                     (*enc_ctx.as_mut_ptr()).thread_count = i32::from(is_any_hw_encoder(codec_name));
                 }

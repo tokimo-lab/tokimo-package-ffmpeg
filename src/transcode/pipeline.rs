@@ -8,6 +8,7 @@ use rsmpeg::{
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 
+use super::encode::KeyframeForcer;
 use super::filter::{FilterPipeline, OwnedFilterPipeline};
 use super::scheduler::{MuxScheduler, dts_to_us};
 
@@ -85,6 +86,7 @@ pub fn video_filter_encode_loop(
     enc_tb: ffi::AVRational,
     out_tb: ffi::AVRational,
     scheduler: Arc<MuxScheduler>,
+    mut kf_forcer: Option<KeyframeForcer>,
 ) -> Result<()> {
     let sched = Some(scheduler.as_ref());
     while let Ok(frame) = frame_rx.recv() {
@@ -97,6 +99,7 @@ pub fn video_filter_encode_loop(
             enc_tb,
             out_tb,
             sched,
+            kf_forcer.as_mut(),
         )?;
     }
 
@@ -110,6 +113,7 @@ pub fn video_filter_encode_loop(
         enc_tb,
         out_tb,
         sched,
+        kf_forcer.as_mut(),
     )?;
 
     // Flush encoder
@@ -133,11 +137,13 @@ fn push_filter_encode(
     enc_tb: ffi::AVRational,
     out_tb: ffi::AVRational,
     scheduler: Option<&MuxScheduler>,
+    kf_forcer: Option<&mut KeyframeForcer>,
 ) -> Result<()> {
     pipeline.buffersrc_ctx.buffersrc_add_frame(frame, None)?;
-    drain_filter_encode(pipeline, enc_ctx, pkt_tx, out_idx, enc_tb, out_tb, scheduler)
+    drain_filter_encode(pipeline, enc_ctx, pkt_tx, out_idx, enc_tb, out_tb, scheduler, kf_forcer)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn drain_filter_encode(
     pipeline: &mut FilterPipeline,
     enc_ctx: &mut AVCodecContext,
@@ -146,6 +152,7 @@ fn drain_filter_encode(
     enc_tb: ffi::AVRational,
     out_tb: ffi::AVRational,
     scheduler: Option<&MuxScheduler>,
+    mut kf_forcer: Option<&mut KeyframeForcer>,
 ) -> Result<()> {
     loop {
         let mut filtered = match pipeline.buffersink_ctx.buffersink_get_frame(None) {
@@ -159,6 +166,9 @@ fn drain_filter_encode(
 
         if filtered.pts != ffi::AV_NOPTS_VALUE && (filter_tb.num != enc_tb.num || filter_tb.den != enc_tb.den) {
             filtered.set_pts(unsafe { ffi::av_rescale_q(filtered.pts, filter_tb, enc_tb) });
+        }
+        if let Some(forcer) = kf_forcer.as_deref_mut() {
+            forcer.apply(&mut filtered);
         }
 
         enc_ctx.send_frame(Some(&filtered))?;

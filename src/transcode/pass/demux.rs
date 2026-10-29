@@ -36,7 +36,6 @@ pub(super) fn run_demux_loop(
     decode_accel: &Option<HwAccel>,
 ) -> Result<()> {
     let copy_video = cfg.copy_video;
-    let copy_audio = cfg.copy_audio;
 
     // ── Pre-compute PTS thresholds ───────────────────────────────────────
     let duration_end_pts: Vec<i64> = if let (Some(dur), Some(seek)) = (opts.duration, opts.seek) {
@@ -69,8 +68,12 @@ pub(super) fn run_demux_loop(
         vec![i64::MAX; analysis.nb_streams]
     };
 
+    // Copy video must start on a source keyframe (see the keyframe gate below),
+    // so no PTS trimming then.  Otherwise trim every stream — including copied
+    // audio — to the exact seek target, so a seek-restarted HLS segment N
+    // starts at `N * hls_time` like the pre-generated playlist claims.
     let seek_pts_per_stream: Vec<i64> = if let Some(seek_secs) = opts.seek {
-        if copy_video || copy_audio {
+        if copy_video {
             vec![0i64; analysis.nb_streams]
         } else {
             let seek_with_offset = seek_secs + cfg.format_start_secs;
@@ -196,6 +199,7 @@ pub(super) fn run_demux_loop(
             let enc_tb = video_enc.time_base;
             let out_tb = ofmt_ctx.streams()[vid_out_idx].time_base;
             let video_seek_pts = seek_pts_per_stream[vid_idx];
+            let video_kf_forcer = pipe.kf_forcers[vid_idx].take();
 
             let is_gpu = targets.video[vid_idx].as_ref().is_some_and(|t| t.gpu_pipeline);
             let (pkt_buf, frame_buf) = if is_gpu { (4, 2) } else { (16, 8) };
@@ -227,6 +231,7 @@ pub(super) fn run_demux_loop(
                     enc_tb,
                     out_tb,
                     video_sched,
+                    video_kf_forcer,
                 )
             });
 
@@ -392,10 +397,21 @@ pub(super) fn run_demux_loop(
                         if pts != ffi::AV_NOPTS_VALUE {
                             f.set_pts(pts);
                         }
-                        filter_encode_write_frame(Some(f), fp, enc_ctx, ofmt_ctx, out_idx)?;
+                        filter_encode_write_frame(
+                            Some(f),
+                            fp,
+                            enc_ctx,
+                            ofmt_ctx,
+                            out_idx,
+                            pipe.kf_forcers[in_stream_idx].as_mut(),
+                        )?;
                     }
                 }
                 StreamMapping::Copy { out_idx, .. } => {
+                    let copy_seek = seek_pts_per_stream[in_stream_idx];
+                    if copy_seek > 0 && packet.pts != ffi::AV_NOPTS_VALUE && packet.pts < copy_seek {
+                        continue;
+                    }
                     let out_idx = *out_idx;
                     let in_stream = &ifmt_ctx.streams()[in_stream_idx];
                     let out_stream = &ofmt_ctx.streams()[out_idx];

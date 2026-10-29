@@ -63,9 +63,16 @@ pub(super) fn flush_and_finalize(
                             };
                         let mut f = processed;
                         f.set_pts(f.best_effort_timestamp);
-                        filter_encode_write_frame(Some(f), fp, enc_ctx, ofmt_ctx, out_idx)?;
+                        filter_encode_write_frame(
+                            Some(f),
+                            fp,
+                            enc_ctx,
+                            ofmt_ctx,
+                            out_idx,
+                            pipeline.kf_forcers[i].as_mut(),
+                        )?;
                     }
-                    filter_encode_write_frame(None, fp, enc_ctx, ofmt_ctx, out_idx)?;
+                    filter_encode_write_frame(None, fp, enc_ctx, ofmt_ctx, out_idx, pipeline.kf_forcers[i].as_mut())?;
                     flush_encoder(enc_ctx, ofmt_ctx, out_idx)?;
                 }
                 _ => {}

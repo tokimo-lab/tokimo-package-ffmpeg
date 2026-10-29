@@ -8,7 +8,7 @@ use rsmpeg::{
 };
 use std::ffi::CString;
 
-use super::super::encode::apply_video_encoder_options;
+use super::super::encode::{apply_video_encoder_options, enable_forced_idr};
 use super::super::filter::{self, FilterPipeline, OwnedFilterPipeline};
 use super::super::hw::{HwAccel, HwPipeline, codec_id_for_encoder, format_name};
 use super::super::types::{StreamMapping, TranscodeOptions};
@@ -157,6 +157,9 @@ pub(super) fn init_gpu_pipelines(
         let preset_cstr = CString::new(opts.preset.clone())?;
         let enc_opts = Some(AVDictionary::new(c"preset", &preset_cstr, 0));
         enc_ctx.set_gop_size(opts.gop.unwrap_or(250));
+        if opts.force_key_frames_interval.is_some() {
+            enable_forced_idr(&mut enc_ctx);
+        }
         unsafe {
             (*enc_ctx.as_mut_ptr()).thread_count = 1;
         }

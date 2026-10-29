@@ -105,6 +105,25 @@ pub(super) fn configure_output(
         );
     }
 
+    // Apple's HLS spec requires HEVC in fMP4 to use the `hvc1` sample entry
+    // (parameter sets in the init segment).  FFmpeg defaults to `hev1`, which
+    // Safari / ManagedMediaSource handle unreliably.
+    if opts
+        .hls
+        .as_ref()
+        .is_some_and(|h| h.segment_type == HlsSegmentType::Fmp4)
+    {
+        let hvc1 = u32::from_le_bytes(*b"hvc1");
+        for stream in ofmt_ctx.streams() {
+            unsafe {
+                let par = (*stream.as_ptr()).codecpar;
+                if (*par).codec_id == ffi::AV_CODEC_ID_HEVC {
+                    (*par).codec_tag = hvc1;
+                }
+            }
+        }
+    }
+
     ofmt_ctx.write_header(&mut mux_opts)?;
 
     Ok(())

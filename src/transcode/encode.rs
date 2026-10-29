@@ -39,6 +39,7 @@ pub fn filter_encode_write_frame(
     enc_ctx: &mut AVCodecContext,
     ofmt_ctx: &mut AVFormatContextOutput,
     out_stream_idx: usize,
+    mut kf_forcer: Option<&mut KeyframeForcer>,
 ) -> Result<()> {
     pipeline.buffersrc_ctx.buffersrc_add_frame(frame, None)?;
 
@@ -56,6 +57,9 @@ pub fn filter_encode_write_frame(
         let enc_tb = enc_ctx.time_base;
         if filtered_frame.pts != ffi::AV_NOPTS_VALUE && (filter_tb.num != enc_tb.num || filter_tb.den != enc_tb.den) {
             filtered_frame.set_pts(unsafe { ffi::av_rescale_q(filtered_frame.pts, filter_tb, enc_tb) });
+        }
+        if let Some(forcer) = kf_forcer.as_deref_mut() {
+            forcer.apply(&mut filtered_frame);
         }
 
         encode_write_frame(Some(filtered_frame), enc_ctx, ofmt_ctx, out_stream_idx)?;
@@ -75,6 +79,64 @@ pub fn flush_encoder(
     }
     encode_write_frame(None, enc_ctx, ofmt_ctx, out_stream_idx)?;
     Ok(())
+}
+
+// ── Keyframe forcing ────────────────────────────────────────────────────────
+
+/// Forces a keyframe every `interval` seconds, measured from the first frame
+/// of the pass (FFI equivalent of CLI `-force_key_frames expr:gte(t,n_forced*N)`).
+///
+/// The HLS muxer can only cut segments on keyframes, and it cuts once
+/// `pts - start_pts >= hls_time * n`.  Without forced keyframes the encoder's
+/// natural GOP (250 frames + scenecut) produces irregular ~8–10 s segments
+/// that drift away from the pre-generated 6 s VOD playlist, so segment N no
+/// longer covers `N * hls_time` and players stall after a seek.
+pub struct KeyframeForcer {
+    interval: i64,
+    next: Option<i64>,
+}
+
+impl KeyframeForcer {
+    /// `enc_tb` is the time base of frames handed to [`Self::apply`].
+    pub fn new(interval_secs: f64, enc_tb: ffi::AVRational) -> Option<Self> {
+        if interval_secs <= 0.0 || enc_tb.num <= 0 || enc_tb.den <= 0 {
+            return None;
+        }
+        let interval = (interval_secs * f64::from(enc_tb.den) / f64::from(enc_tb.num)).round() as i64;
+        (interval > 0).then_some(Self { interval, next: None })
+    }
+
+    /// Mark `frame` as a forced I-frame when it crosses the next boundary.
+    pub fn apply(&mut self, frame: &mut AVFrame) {
+        let pts = frame.pts;
+        if pts == ffi::AV_NOPTS_VALUE {
+            return;
+        }
+        let next = match self.next {
+            None => pts,
+            Some(next) if pts >= next => next,
+            Some(_) => return,
+        };
+        frame.set_pict_type(ffi::AV_PICTURE_TYPE_I);
+        // Skip over any boundaries a timestamp jump may have crossed.
+        self.next = Some(next + self.interval * ((pts - next) / self.interval + 1));
+    }
+}
+
+/// Make forced I-frames real IDR frames so every HLS segment starts with an
+/// independently decodable picture (libx264/libx265/nvenc use `forced-idr`,
+/// qsv/amf use `forced_idr`; VAAPI and VideoToolbox already treat them as IDR).
+pub fn enable_forced_idr(enc_ctx: &mut AVCodecContext) {
+    for key in [c"forced-idr", c"forced_idr"] {
+        unsafe {
+            ffi::av_opt_set(
+                enc_ctx.as_mut_ptr().cast(),
+                key.as_ptr(),
+                c"1".as_ptr(),
+                ffi::AV_OPT_SEARCH_CHILDREN as i32,
+            );
+        }
+    }
 }
 
 // ── Encoder option helpers ──────────────────────────────────────────────────
@@ -159,5 +221,45 @@ pub fn parse_bitrate(s: &str) -> Result<i64> {
     } else {
         let val: i64 = s.parse().map_err(|e| Error::Other(format!("Invalid bitrate: {e}")))?;
         Ok(val)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn forced_at(forcer: &mut KeyframeForcer, pts: i64) -> bool {
+        let mut frame = AVFrame::new();
+        frame.set_pts(pts);
+        forcer.apply(&mut frame);
+        frame.pict_type == ffi::AV_PICTURE_TYPE_I
+    }
+
+    #[test]
+    fn keyframe_forcer_aligns_to_first_frame() {
+        // 23.976 fps in a 1/24000 time base; 6 s segments starting at 7026 s.
+        let tb = ffi::AVRational { num: 1, den: 24000 };
+        let mut forcer = KeyframeForcer::new(6.0, tb).unwrap();
+        let start = 7026 * 24000;
+        let forced: Vec<i64> = (0..400)
+            .map(|i| start + i * 1001)
+            .filter(|&pts| forced_at(&mut forcer, pts))
+            .collect();
+        assert_eq!(forced.len(), 3);
+        assert_eq!(forced[0], start);
+        for (k, pts) in forced.iter().enumerate() {
+            let boundary = start + k as i64 * 6 * 24000;
+            assert!(*pts >= boundary && *pts < boundary + 1001, "kf {k} at {pts}");
+        }
+    }
+
+    #[test]
+    fn keyframe_forcer_skips_crossed_boundaries() {
+        let tb = ffi::AVRational { num: 1, den: 1000 };
+        let mut forcer = KeyframeForcer::new(6.0, tb).unwrap();
+        assert!(forced_at(&mut forcer, 0));
+        assert!(forced_at(&mut forcer, 20_000));
+        assert!(!forced_at(&mut forcer, 23_000));
+        assert!(forced_at(&mut forcer, 24_000));
     }
 }

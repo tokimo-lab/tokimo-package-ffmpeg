@@ -37,7 +37,7 @@ pub fn convert_audio(input_data: &[u8], opts: &AudioConvertOptions) -> Result<Ve
     let tmp_output = std::env::temp_dir().join(format!(
         "tokimo_audio_out_{:x}.{}",
         timestamp_nanos(),
-        &opts.output_format
+        opts.output_format
     ));
 
     std::fs::write(&tmp_input, input_data)?;
